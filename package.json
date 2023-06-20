@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc",
     "start": "npm run build && node dist/index",
-    "dev": "nodemon -w src -e ts -x 'npm start'"
+    "dev": "DEBUG=true nodemon -w src -e ts -x 'npm start'"
   },
   "keywords": [],
   "author": "",

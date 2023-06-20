@@ -1,0 +1,20 @@
+{
+  "name": "gitlet",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "npm run build && node dist/index",
+    "dev": "nodemon -w src -e ts -x 'npm start'"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^20.3.1",
+    "nodemon": "^2.0.22",
+    "typescript": "^5.1.3"
+  }
+}

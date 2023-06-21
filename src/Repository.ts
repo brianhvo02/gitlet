@@ -1,14 +1,14 @@
 import { existsSync } from "fs";
 import { join } from "path";
-import { __dirname, createError, sha1 } from "./util.js";
+import { __dirname, createError, log, sha1, strComp } from "./util.js";
 import { cp, mkdir, readFile, readdir, rm, writeFile } from "fs/promises";
 import { cwd } from "process";
 import Commit, { Files } from "./Commit.js";
 
 
 export default class Repository {
-    static DIRECTORY_PATH = join(cwd(), process.env.DEBUG ? 'test_proj' : '');
-    static GITLET_PATH = join(this.DIRECTORY_PATH, '.gitlet');
+    static WORKING_PATH = join(cwd(), process.env.DEBUG ? 'test_proj' : '');
+    static GITLET_PATH = join(this.WORKING_PATH, '.gitlet');
     static HEAD_PATH = join(this.GITLET_PATH, 'HEAD');
     static COMMITS_PATH = join(this.GITLET_PATH, 'commits');
     static STAGING_PATH = join(this.GITLET_PATH, 'staging');
@@ -31,8 +31,8 @@ export default class Repository {
 
         const head = await readFile(this.HEAD_PATH, { encoding: 'utf-8' });
         const headHash = await readFile(join(this.BRANCHES_PATH, head), { encoding: 'utf-8' });
-        const headCommit = await readFile(join(this.BRANCHES_PATH, headHash), { encoding: 'utf-8' });
-        return new Repository(head, await Commit.read(this.COMMITS_PATH, head));
+        const headCommit = await Commit.read(this.COMMITS_PATH, headHash);
+        return new Repository(head, headHash, headCommit);
     }
 
     static async init() {
@@ -55,11 +55,11 @@ export default class Repository {
         await writeFile(this.HEAD_PATH, 'main');
         await writeFile(join(this.BRANCHES_PATH, 'main'), hash);
         
-        console.log(`Initialized empty Gitlet repository in ${this.GITLET_PATH}.`)
+        log(`Initialized empty Gitlet repository in ${this.GITLET_PATH}.`)
     }
 
     async add(filename: string) {
-        const filePath = join(Repository.DIRECTORY_PATH, filename);
+        const filePath = join(Repository.WORKING_PATH, filename);
         if (!existsSync(filePath))
             createError('File does not exist.');
 
@@ -112,15 +112,15 @@ export default class Repository {
             timestamp: new Date(), 
             message,
             files,
-            parent1: this.head
+            parent1: this.headHash
         });
         const serial = newCommit.serialize();
         const hash = sha1(serial);
 
         await writeFile(join(Repository.COMMITS_PATH, hash), serial);
-        await writeFile(join(Repository.HEAD_PATH), hash);
+        await writeFile(join(Repository.BRANCHES_PATH, this.head), hash);
 
-        this.head = hash;
+        this.headHash = hash;
         this.headCommit = newCommit;
     }
 
@@ -136,16 +136,16 @@ export default class Repository {
 
         if (this.headCommit.files[filename]) {
             await writeFile(join(Repository.STAGING_PATH, `[REMOVE] ${filename}`), '');
-            const filepath = join(Repository.DIRECTORY_PATH, filename);
+            const filepath = join(Repository.WORKING_PATH, filename);
             if (existsSync(filepath))
                 await rm(filepath);
         }
     }
 
     async log(hash?: string) {
-        hash ??= this.head;
+        hash ??= this.headHash;
         const commit = await Commit.read(Repository.COMMITS_PATH, hash);
-        console.log(
+        log(
 `===
 commit ${hash}
 Date: ${commit.timestamp.toString()}
@@ -155,5 +155,102 @@ ${commit.message}
 
         if (commit.parent1)
             this.log(commit.parent1);
+    }
+
+    async globalLog() {
+        for (const hash of await readdir(Repository.COMMITS_PATH)) {
+            const commit = await Commit.read(Repository.COMMITS_PATH, hash);
+            log(
+`===
+commit ${hash}
+Date: ${commit.timestamp.toString()}
+${commit.message}
+`
+            );
+        }
+    }
+
+    async find(message: string) {
+        let commitFound = false;
+
+        for (const hash of await readdir(Repository.COMMITS_PATH)) {
+            const commit = await Commit.read(Repository.COMMITS_PATH, hash);
+            if (commit.message === message) {
+                log(hash);
+                commitFound = true;
+            }
+        }
+
+        if (!commitFound)
+            log('Found no commit with that message.');
+    }
+
+    getWorkingFiles = async (): Promise<Files> => readdir(Repository.WORKING_PATH, {
+        withFileTypes: true 
+    })
+    .then(filenames => 
+        filenames.filter(filename => filename.isFile())
+            .map(filename => 
+                readFile(join(Repository.WORKING_PATH, filename.name))
+                    .then(buf => [filename.name, sha1(buf)])
+            )
+    )
+    .then(arr => Promise.all(arr))
+    .then(Object.fromEntries);
+
+    async status() {
+        const branches = await readdir(Repository.BRANCHES_PATH)
+            .then(filenames => filenames.sort(strComp));
+        branches[branches.indexOf(this.head)] = `*${this.head}`;
+
+        const { staged, removed } = await readdir(Repository.STAGING_PATH)
+            .then(filenames => 
+                filenames.reduce((obj: { staged: string[], removed: string[] }, filename) => {
+                    if (filename.includes('[REMOVE]')) {
+                        obj.removed.push(filename.slice(9));
+                    } else {
+                        obj.staged.push(filename);
+                    }
+
+                    return obj;
+                }, { staged: [], removed: [] })
+            );
+
+        const workingFiles = await this.getWorkingFiles();
+
+        const { modified, unstageRemoved, untracked } = Object.keys(this.headCommit.files).reduce(
+            (obj: { modified: string[], unstageRemoved: string[], untracked: string[] }, filename) => {
+                if (staged.includes(filename) || removed.includes(filename))
+                    return obj;
+
+                if (this.headCommit.files[filename] !== workingFiles[filename]) {
+                    obj.modified.push(filename);
+                } else if (!workingFiles) {
+                    obj.unstageRemoved.push(filename);
+                } else {
+                    obj.untracked.push(filename);
+                }
+                
+                return obj;
+            }, { modified: [], unstageRemoved: [], untracked: [] }
+        );
+
+        log(
+`=== Branches ===
+${branches.join('\n')}
+
+=== Staged Files ===
+${staged.sort(strComp).join('\n')}
+
+=== Removed Files ===
+${removed.sort(strComp).join('\n')}
+
+=== Modifications Not Staged For Commit ===
+${modified.sort(strComp).join('\n')}
+
+=== Untracked Files ===
+${untracked.sort(strComp).join('\n')}
+`
+        );
     }
 }

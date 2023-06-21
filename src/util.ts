@@ -13,3 +13,7 @@ export const sha1 = (input: string | Buffer) => {
     hash.update(input);
     return hash.digest('hex');
 }
+
+export const log = (output: any) => console.log(output);
+
+export const strComp = (a: string, b: string) => a.localeCompare(b);

@@ -1,5 +1,6 @@
 import { readFile } from "fs/promises";
 import { join } from "path";
+import Repository from "./Repository.js";
 
 export interface Files {
     [filename: string]: string;
@@ -28,8 +29,8 @@ export default class Commit implements SerializedCommit {
         this.parent2 = serial.parent2;
     }
 
-    static read = async (path: string, hash: string) => 
-        readFile(join(path, hash), { encoding: 'utf-8' })
+    static read = async (hash: string) => 
+        readFile(join(Repository.COMMITS_PATH, hash), { encoding: 'utf-8' })
             .then(JSON.parse)
             .then(raw => new Commit(raw));
 

@@ -1,4 +1,6 @@
 import { createHash } from "crypto";
+import { writeFile } from "fs/promises";
+import { join } from "path";
 import { fileURLToPath } from "url";
 
 export const __dirname = fileURLToPath(new URL('.', import.meta.url));

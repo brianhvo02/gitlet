@@ -22,7 +22,7 @@ export default class Commit implements SerializedCommit {
     parent2?: string | undefined;
 
     constructor(serial: SerializedCommit) {
-        this.timestamp = ['string', 'number'].includes(typeof serial.timestamp) ? new Date(serial.timestamp) : new Date();
+        this.timestamp = typeof serial.timestamp === 'string' || typeof serial.timestamp === 'number' ? new Date(serial.timestamp) : serial.timestamp;
         this.message = serial.message;
         this.files = serial.files;
         this.parent1 = serial.parent1;
@@ -41,4 +41,22 @@ export default class Commit implements SerializedCommit {
         parent1: this.parent1,
         parent2: this.parent2
     });
+
+    static async findSplitPoint(currentHash: string, givenHash: string): Promise<string | null> {
+        // console.log(currentHash, givenHash)
+        if (currentHash === givenHash)
+            return currentHash;
+        
+        const currentCommit = await Commit.read(currentHash);
+        const givenCommit = await Commit.read(givenHash);
+
+        if (!currentCommit.parent1 || !givenCommit.parent1) 
+            return null;
+
+        if (currentCommit.timestamp > givenCommit.timestamp) {
+            return this.findSplitPoint(currentCommit.parent1, givenHash);
+        } else {
+            return this.findSplitPoint(currentHash, givenCommit.parent1);
+        }
+    }
 }

@@ -81,7 +81,7 @@ export default class Repository {
             await rm(stagedFilePath);
     }
 
-    async commit(message: string) {
+    async commit(message: string, parent2?: string) {
         const stagingFiles = await readdir(Repository.STAGING_PATH);
 
         if (!stagingFiles.length)
@@ -109,7 +109,8 @@ export default class Repository {
             timestamp: new Date(), 
             message,
             files,
-            parent1: this.headHash
+            parent1: this.headHash,
+            parent2
         });
         const serial = newCommit.serialize();
         const hash = sha1(serial);
@@ -144,7 +145,11 @@ export default class Repository {
         const commit = await Commit.read(hash);
         log(
 `===
-commit ${hash}
+commit ${hash}${
+    commit.parent1 && commit.parent2 
+    ? `\nMerge: ${commit.parent1.slice(0, 7)} ${commit.parent2.slice(0, 7)}` 
+    : ''
+}
 Date: ${commit.timestamp.toString()}
 ${commit.message}
 `
@@ -159,7 +164,11 @@ ${commit.message}
             const commit = await Commit.read(hash);
             log(
 `===
-commit ${hash}
+commit ${hash}${
+    commit.parent1 && commit.parent2 
+    ? `\nMerge: ${commit.parent1.slice(0, 7)} ${commit.parent2.slice(0, 7)}` 
+    : ''
+}
 Date: ${commit.timestamp.toString()}
 ${commit.message}
 `
@@ -286,13 +295,15 @@ ${untracked.sort(strComp).join('\n')}
         this.headCommit = commit;
     }
 
+    branchExists = (branchName: string) => existsSync(join(Repository.BRANCHES_PATH, branchName));
+
     async checkout({ filename, commitId, branchName }: {
         filename?: string;
         commitId?: string;
         branchName?: string;
     }) {
         if (branchName) {
-            if (!existsSync(join(Repository.BRANCHES_PATH, branchName))) 
+            if (!this.branchExists(branchName)) 
                 createError('No such branch exists.');
             
             if (this.head === branchName)
@@ -306,11 +317,7 @@ ${untracked.sort(strComp).join('\n')}
             
             this.head = branchName;
             this.headHash = commitHash;
-
-            return;
-        }
-
-        if (filename) {
+        } else if (filename) {
             if (commitId && !existsSync(join(Repository.COMMITS_PATH, commitId)))
                 createError('No commit with that id exists.');
 
@@ -324,14 +331,14 @@ ${untracked.sort(strComp).join('\n')}
     }
 
     async branch(branchName: string) {
-        if (existsSync(join(Repository.BRANCHES_PATH, branchName))) 
+        if (this.branchExists(branchName)) 
             createError('A branch with that name already exists.');
 
         await writeFile(join(Repository.BRANCHES_PATH, branchName), this.headHash);
     }
 
     async rmBranch(branchName: string) {
-        if (!existsSync(join(Repository.BRANCHES_PATH, branchName))) 
+        if (!this.branchExists(branchName)) 
             createError('A branch with that name does not exist.');
 
         await rm(join(Repository.BRANCHES_PATH, branchName));
@@ -343,7 +350,93 @@ ${untracked.sort(strComp).join('\n')}
 
         await writeFile(join(Repository.BRANCHES_PATH, this.head), commitId);
         this.headHash = commitId;
+    }
 
-        return;
+    async merge(branchName: string) {
+        if (await readdir(Repository.STAGING_PATH).then(arr => arr.length))
+            createError('You have uncommitted changes.');
+
+        if (!this.branchExists(branchName))
+            createError('A branch with that name does not exist.');
+
+        if (this.head === branchName)
+            createError('Cannot merge a branch with itself.');
+        
+        const givenHash = await readFile(join(Repository.BRANCHES_PATH, branchName), { encoding: 'utf-8' });
+
+        const splitPointHash = await Commit.findSplitPoint(this.headHash, givenHash);
+
+        if (!splitPointHash)
+            return createError('Cannot merge a branch with itself.');
+        
+        if (splitPointHash === givenHash)
+            return log('Given branch is an ancestor of the current branch.');
+
+        const givenCommit = await this.getCommit(givenHash);
+
+        if (splitPointHash === this.headHash) {
+            await this.overwriteWorking(givenCommit);
+
+            await writeFile(join(Repository.BRANCHES_PATH, this.head), givenHash);
+            this.headHash = givenHash;
+            return log('Current branch fast-forwarded.');
+        }
+
+        const splitPoint = await this.getCommit(splitPointHash);
+        await this.getCommit(this.headHash);
+
+        const allFilenames = new Set(
+            [ 
+                splitPoint.files, this.headCommit.files, givenCommit.files 
+            ].reduce((arr: string[], files) => arr.concat(Object.keys(files)), [])
+        );
+
+        let mergeConflict = false;
+
+        const files: Files = {};
+
+        for (const filename of allFilenames) {
+            const splitHash = splitPoint.files[filename];
+            const currentHash = this.headCommit.files[filename];
+            const givenFileHash = givenCommit.files[filename];
+            
+            if (splitHash && currentHash && givenFileHash && splitHash !== givenFileHash && splitHash === currentHash) {
+                await this.checkout({ filename, commitId: givenHash });
+                await this.add(filename);
+            } 
+            else if (splitHash && currentHash && givenFileHash && splitHash !== currentHash && splitHash === givenFileHash) 
+                continue;
+            else if (splitHash && splitHash !== currentHash && currentHash === givenFileHash)
+                continue;
+            else if (!splitHash && currentHash && !givenFileHash) 
+                continue;
+            else if (!splitHash && !currentHash && givenFileHash) {
+                await this.checkout({ filename, commitId: givenHash });
+                await this.add(filename);
+            }
+            else if (splitHash && splitHash === currentHash && !givenFileHash) {
+                await rm(join(Repository.WORKING_PATH, filename));
+                if (existsSync(join(Repository.STAGING_PATH, filename)))
+                    await rm(join(Repository.STAGING_PATH, filename));
+            } else if (splitHash && splitHash === givenFileHash && !currentHash) 
+                continue;
+            else {
+                mergeConflict = true;
+                await writeFile(
+                    join(Repository.WORKING_PATH, filename), 
+                    `<<<<<<< HEAD
+${currentHash ? await readFile(join(Repository.OBJECTS_PATH, currentHash), { encoding: 'utf-8' }) : ''}
+=======
+${givenFileHash ? await readFile(join(Repository.OBJECTS_PATH, givenFileHash), { encoding: 'utf-8' }) : ''}
+>>>>>>>
+`
+                );
+            }
+        }
+
+        await this.commit(`Merged ${branchName} into ${this.head}.`, givenHash);
+
+        if (mergeConflict)
+            log('Encountered a merge conflict.');
     }
 }

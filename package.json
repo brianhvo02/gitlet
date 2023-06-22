@@ -4,10 +4,14 @@
   "description": "",
   "main": "index.js",
   "type": "module",
+  "bin": {
+    "gitlet": "dist/index.js"
+  },
   "scripts": {
     "build": "tsc",
     "start": "npm run build && node dist/index",
-    "dev": "DEBUG=true nodemon -w src -e ts -x 'npm start'"
+    "test": "npm run build && node dist/test",
+    "dev": "DEBUG=true nodemon -w src -e ts -x 'npm test'"
   },
   "keywords": [],
   "author": "",

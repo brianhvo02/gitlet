@@ -1,17 +1,12 @@
 #!/usr/bin/env node
-
 import Repository from "./Repository.js";
-import { argv, cwd } from "process";
-
-const [ _, __, command, arg1, arg2, arg3 ] = argv;
-
+import { argv } from "process";
+const [_, __, command, arg1, arg2, arg3] = argv;
 if (command === 'init') {
     Repository.init();
     process.exit(0);
 }
-
 const repo = await Repository.open();
-
 switch (command) {
     case 'add':
         repo.add(arg1);
@@ -35,7 +30,7 @@ switch (command) {
         repo.status();
         break;
     case 'checkout':
-        if (arg1 === '--') 
+        if (arg1 === '--')
             repo.checkout({ filename: arg2 });
         else if (arg2 === '--')
             repo.checkout({ commitId: arg1, filename: arg3 });
